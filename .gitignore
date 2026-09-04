@@ -1,0 +1,6 @@
+prompt-tap/logs/
+prompt-tap/.env
+.superpowers/
+__pycache__/
+*.py[cod]
+.pytest_cache/

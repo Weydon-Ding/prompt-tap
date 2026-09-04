@@ -1,0 +1,14 @@
+services:
+  prompt-tap:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: prompt-tap
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./logs:/logs
+    ports:
+      - "127.0.0.1:8888:8080"
