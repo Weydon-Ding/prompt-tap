@@ -11,6 +11,31 @@ EMPTY_LOG_MESSAGE = (
 
 
 RECENT_TURNS_MESSAGE = "Prompt Log found. Showing today's recent Prompt Turns."
+REPEATED_SYSTEM_PROMPT_MESSAGE = "Repeated system prompt (same as earlier)."
+NON_BUBBLE_REQUEST_KEYS = {
+    "max_completion_tokens",
+    "max_tokens",
+    "model",
+    "frequency_penalty",
+    "logprobs",
+    "metadata",
+    "messages",
+    "n",
+    "parallel_tool_calls",
+    "presence_penalty",
+    "reasoning_effort",
+    "response_format",
+    "seed",
+    "service_tier",
+    "stop",
+    "store",
+    "stream",
+    "stream_options",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p",
+}
 
 
 def current_date(timezone: str):
@@ -51,60 +76,185 @@ def dict_items(value):
     return [item for item in value if isinstance(item, dict)]
 
 
-def extract_request_bubbles(record):
+def extract_request_bubbles(record, seen_system_prompts=None):
     payload = as_dict(record.get("payload"))
     bubbles = []
+    messages = dict_items(payload.get("messages"))
 
-    for message in dict_items(payload.get("messages")):
-        if message.get("role") != "user":
-            continue
+    top_level_system = payload.get("system")
+    if top_level_system is not None:
+        append_system_bubble(bubbles, top_level_system, seen_system_prompts)
 
-        bubbles.append({
-            "role": "user",
-            "content": normalize_content(message.get("content")),
-        })
+    if messages:
+        for message in messages:
+            if message.get("role") == "system":
+                append_system_bubble(bubbles, message.get("content"), seen_system_prompts)
 
-    prompt = payload.get("prompt")
-    if prompt is not None:
-        bubbles.append({"role": "user", "content": normalize_content(prompt)})
+        user_selected = False
+        for message in reversed(messages):
+            if message.get("role") == "user" and not is_tool_result_message(message):
+                bubbles.append({
+                    "role": "user",
+                    "content": normalize_content(message.get("content")),
+                })
+                user_selected = True
+                break
 
-    user_input = payload.get("input")
-    if user_input is not None:
-        bubbles.append({"role": "user", "content": normalize_content(user_input)})
+        if not user_selected:
+            append_raw_input_bubbles(bubbles, payload)
+
+        return bubbles
+
+    append_raw_input_bubbles(bubbles, payload)
+
+    if not bubbles and payload:
+        unknown_payload = displayable_unknown_payload(payload)
+        if unknown_payload:
+            bubbles.append({"role": "unknown", "content": normalize_content(unknown_payload)})
 
     return bubbles
 
 
+def displayable_unknown_payload(payload):
+    if "tools" not in payload and "messages" not in payload:
+        return payload
+
+    unknown_payload = {
+        key: value for key, value in payload.items() if key not in NON_BUBBLE_REQUEST_KEYS
+    }
+    if unknown_payload:
+        return unknown_payload
+
+    return None
+
+
+def append_raw_input_bubbles(bubbles, payload):
+    prompt = payload.get("prompt")
+    if prompt is not None:
+        bubbles.append({"role": "raw", "content": normalize_content(prompt)})
+
+    user_input = payload.get("input")
+    if user_input is not None:
+        bubbles.append({"role": "raw", "content": normalize_content(user_input)})
+
+
+def append_system_bubble(bubbles, content, seen_system_prompts=None):
+    content = normalize_content(content)
+    if seen_system_prompts is None or not content:
+        display_content = content
+    elif content in seen_system_prompts:
+        display_content = REPEATED_SYSTEM_PROMPT_MESSAGE
+    else:
+        seen_system_prompts.add(content)
+        display_content = content
+
+    bubbles.append({"role": "system", "content": display_content})
+
+
 def extract_response_bubbles(record):
-    content = extract_response_content(record)
-    if content == "":
-        return []
-
-    return [{"role": "assistant", "content": content}]
-
-
-def extract_response_content(record):
     payload = as_dict(record.get("payload"))
     if payload:
-        messages = []
-        for choice in dict_items(payload.get("choices")):
-            message = as_dict(choice.get("message"))
-            content = message.get("content")
-            if content:
-                messages.append(normalize_content(content))
+        choice_bubbles = extract_choice_bubbles(payload)
+        if choice_bubbles:
+            return choice_bubbles
 
-        if messages:
-            return "\n".join(messages)
+        anthropic_bubbles = extract_anthropic_response_bubbles(payload)
+        if anthropic_bubbles:
+            return anthropic_bubbles
 
     raw_body = record.get("raw_body")
     if isinstance(raw_body, str) and raw_body:
-        return extract_sse_content(raw_body)
+        return extract_sse_bubbles(raw_body)
 
-    return ""
+    return []
+
+
+def extract_choice_bubbles(payload):
+    choices = dict_items(payload.get("choices"))
+    if not choices:
+        return []
+
+    bubbles = []
+    grouped_tool_calls = []
+    multiple_choices = len(choices) > 1
+
+    for index, choice in enumerate(choices, start=1):
+        message = as_dict(choice.get("message"))
+        if not message:
+            message = choice
+
+        grouped_tool_calls.extend(dict_items(message.get("tool_calls")))
+
+        if "content" in message:
+            content = normalize_content(message.get("content"))
+        else:
+            content = normalize_content(message.get("text"))
+
+        if content:
+            if multiple_choices:
+                content = f"Choice {index}: {content}"
+            role = message.get("role")
+            bubbles.append({
+                "role": role if isinstance(role, str) and role else "assistant",
+                "content": content,
+            })
+        elif not message.get("tool_calls"):
+            fallback = normalize_content(choice)
+            if fallback:
+                if multiple_choices:
+                    fallback = f"Choice {index}: {fallback}"
+                bubbles.append({"role": "assistant", "content": fallback})
+
+    tool_calls = normalize_tool_call_items(grouped_tool_calls)
+    if tool_calls:
+        bubbles.insert(0, {"role": "tool_call", "content": tool_calls})
+
+    return bubbles
+
+
+def extract_anthropic_response_bubbles(payload):
+    content = payload.get("content")
+    if content is None:
+        return []
+
+    bubbles = []
+    text_content = normalize_text_blocks(content)
+    tool_calls = normalize_tool_use_blocks(content)
+
+    if text_content:
+        role = payload.get("role")
+        bubbles.append({
+            "role": role if isinstance(role, str) and role else "assistant",
+            "content": text_content,
+        })
+
+    if tool_calls:
+        bubbles.append({"role": "tool_call", "content": tool_calls})
+
+    return bubbles
+
+
+def extract_response_content(record):
+    bubbles = [
+        bubble
+        for bubble in extract_response_bubbles(record)
+        if bubble.get("role") == "assistant"
+    ]
+    return "\n".join(bubble["content"] for bubble in bubbles)
 
 
 def extract_sse_content(raw_body: str):
-    content = []
+    return "\n".join(
+        bubble["content"]
+        for bubble in extract_sse_bubbles(raw_body)
+        if bubble.get("role") == "assistant"
+    )
+
+
+def extract_sse_bubbles(raw_body: str):
+    choice_content = {}
+    tool_calls = {}
+    anthropic_text = []
 
     for line in raw_body.splitlines():
         if not line.startswith("data:"):
@@ -119,13 +269,68 @@ def extract_sse_content(raw_body: str):
         except json.JSONDecodeError:
             continue
 
-        for choice in dict_items(as_dict(event).get("choices")):
+        event = as_dict(event)
+        if event.get("type") == "content_block_start":
+            content_block = as_dict(event.get("content_block"))
+            if content_block.get("type") == "tool_use":
+                block_index = value_or_default(event.get("index"), len(tool_calls))
+                tool_calls[("anthropic", sort_key(block_index))] = {
+                    "id": content_block.get("id"),
+                    "name": content_block.get("name"),
+                    "input": normalize_content(content_block.get("input")) if content_block.get("input") else "",
+                }
+            continue
+
+        delta = as_dict(event.get("delta"))
+        if event.get("type") == "content_block_delta":
+            piece = delta.get("text")
+            if piece:
+                anthropic_text.append(str(piece))
+
+            partial_json = delta.get("partial_json")
+            if partial_json:
+                block_index = value_or_default(event.get("index"), len(tool_calls))
+                tool_call = tool_calls.setdefault(("anthropic", sort_key(block_index)), {"input": ""})
+                tool_call["input"] = tool_call.get("input", "") + str(partial_json)
+            continue
+
+        for choice_position, choice in enumerate(dict_items(event.get("choices"))):
+            choice_index = value_or_default(choice.get("index"), choice_position)
             delta = as_dict(choice.get("delta"))
+            if (
+                "tool_calls" not in delta
+                or "content" in delta
+                or choice.get("finish_reason") is not None
+            ):
+                choice_content.setdefault(choice_index, [])
+
             piece = delta.get("content")
             if piece:
-                content.append(str(piece))
+                choice_content.setdefault(choice_index, []).append(str(piece))
 
-    return "".join(content)
+            merge_streaming_tool_calls(tool_calls, delta.get("tool_calls"), choice_index)
+
+    bubbles = []
+    if anthropic_text:
+        bubbles.append({"role": "assistant", "content": "".join(anthropic_text)})
+
+    if tool_calls:
+        bubbles.append({
+            "role": "tool_call",
+            "content": normalize_tool_calls([
+                tool_call for _, tool_call in sorted(tool_calls.items())
+            ]),
+        })
+
+    if choice_content:
+        multiple_choices = len(choice_content) > 1
+        for position, choice_index in enumerate(sorted(choice_content, key=sort_key), start=1):
+            content = "".join(choice_content[choice_index])
+            if multiple_choices:
+                content = f"Choice {position}: {content}"
+            bubbles.append({"role": "assistant", "content": content})
+
+    return bubbles
 
 
 def normalize_content(content):
@@ -147,13 +352,126 @@ def normalize_content(content):
     return json.dumps(content, ensure_ascii=False)
 
 
-def to_prompt_turn(turn):
+def value_or_default(value, default):
+    if value is None:
+        return default
+
+    return value
+
+
+def sort_key(value):
+    if isinstance(value, int):
+        return ("int", value)
+
+    return (str(type(value).__name__), str(value))
+
+
+def is_tool_result_message(message):
+    content = message.get("content")
+    if isinstance(content, list):
+        return bool(content) and all(
+            isinstance(block, dict) and block.get("type") == "tool_result"
+            for block in content
+        )
+
+    return isinstance(content, dict) and content.get("type") == "tool_result"
+
+
+def normalize_text_blocks(content):
+    if not isinstance(content, list):
+        return normalize_content(content)
+
+    parts = []
+    for item in content:
+        if not isinstance(item, dict):
+            parts.append(json.dumps(item, ensure_ascii=False))
+            continue
+
+        if item.get("type") == "tool_use":
+            continue
+
+        if "text" in item:
+            parts.append(str(item["text"]))
+        else:
+            parts.append(json.dumps(item, ensure_ascii=False))
+
+    return "\n".join(parts)
+
+
+def normalize_tool_calls(tool_calls):
+    return normalize_tool_call_items(dict_items(tool_calls))
+
+
+def normalize_tool_call_items(tool_calls):
+    calls = []
+    for tool_call in tool_calls:
+        calls.append(normalize_tool_call(tool_call))
+
+    return "\n".join(call for call in calls if call)
+
+
+def normalize_tool_call(tool_call):
+    call_id = tool_call.get("id")
+    function = as_dict(tool_call.get("function"))
+    name = function.get("name") or tool_call.get("name") or "unknown_tool"
+    arguments = function.get("arguments")
+    if arguments is None:
+        arguments = tool_call.get("input")
+
+    parts = [str(name)]
+    if call_id:
+        parts.append(f"({call_id})")
+
+    prefix = " ".join(parts)
+    content = normalize_content(arguments)
+    if content:
+        return f"{prefix}: {content}"
+
+    return prefix
+
+
+def normalize_tool_use_blocks(content):
+    return normalize_tool_call_items([
+        block for block in dict_items(content) if block.get("type") == "tool_use"
+    ])
+
+
+def merge_streaming_tool_calls(tool_calls, delta_tool_calls, choice_index=0):
+    for delta_tool_call in dict_items(delta_tool_calls):
+        tool_index = value_or_default(delta_tool_call.get("index"), len(tool_calls))
+        index = ("openai", sort_key(choice_index), sort_key(tool_index))
+        tool_call = tool_calls.setdefault(index, {"function": {}})
+
+        call_id = delta_tool_call.get("id")
+        if call_id:
+            tool_call["id"] = call_id
+
+        name = delta_tool_call.get("name")
+        if name:
+            tool_call["name"] = name
+
+        function_delta = as_dict(delta_tool_call.get("function"))
+        function = tool_call.setdefault("function", {})
+        function_name = function_delta.get("name")
+        if function_name:
+            function["name"] = function_name
+
+        arguments = function_delta.get("arguments")
+        if arguments:
+            function["arguments"] = function.get("arguments", "") + str(arguments)
+
+        input_delta = delta_tool_call.get("input")
+        if input_delta:
+            tool_call["input"] = tool_call.get("input", "") + normalize_content(input_delta)
+
+
+def to_prompt_turn(turn, seen_system_prompts=None):
     request_record = turn.get("request")
     response_record = turn.get("response")
     bubbles = []
 
     if request_record:
-        bubbles.extend(extract_request_bubbles(request_record))
+        bubbles.extend(extract_request_bubbles(request_record, seen_system_prompts))
 
     if response_record:
         bubbles.extend(extract_response_bubbles(response_record))
@@ -206,7 +524,9 @@ def merge_prompt_turns(records, max_turns):
             turn["path"] = turn.get("path") or record.get("path")
 
     turns = sorted(turns_by_id.values(), key=lambda turn: turn["last_index"])
-    return [to_prompt_turn(turn) for turn in turns[-max_turns:]]
+    selected_turns = turns[-max_turns:]
+    seen_system_prompts = set()
+    return [to_prompt_turn(turn, seen_system_prompts) for turn in selected_turns]
 
 
 def read_today(log_dir: Path, max_turns: int, timezone: str, today=None):

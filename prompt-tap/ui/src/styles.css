@@ -153,6 +153,28 @@ h1 {
   background: #f8fafc;
 }
 
+.prompt-bubble--system {
+  justify-self: stretch;
+  max-width: 100%;
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.prompt-bubble--tool_call {
+  justify-self: stretch;
+  max-width: 100%;
+  background: #fefce8;
+  border-color: #fde68a;
+}
+
+.prompt-bubble--raw,
+.prompt-bubble--unknown {
+  justify-self: start;
+  background: #fdf4ff;
+  border-color: #f5d0fe;
+}
+
 .bubble-role {
   color: #334155;
   font-size: 0.72rem;

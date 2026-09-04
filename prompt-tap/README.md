@@ -187,13 +187,14 @@ cat logs/prompt-$(date +%F).jsonl \
   | jq 'select(.request_id == "<request-id>")'
 ```
 
-查看非流式 JSON 响应中的 AI 回复（适用于 Chat Completions）：
+查看非流式 JSON 响应中的 AI 回复（适用于 Chat Completions 与 Messages API）：
 
 ```bash
 cat logs/prompt-$(date +%F).jsonl \
   | jq -r '
       select(.type == "response")
-      | .payload.choices[]?.message.content
+      | .payload.choices[]?.message.content,
+        .payload.content[]?.text
     '
 ```
 
@@ -215,7 +216,8 @@ Prompt Tap Web UI 提供聊天式 Prompt Log 查看器：
 
 - 打开页面时加载当天最近 200 个 Prompt Turn。
 - 持续监听新增 Prompt Log，并自动追加或更新聊天流。
-- `system`、`user`、`assistant`、`tool_call` 会以不同 Prompt Bubble 展示。
+- `system`、当前 `user`、`assistant`、`tool_call`、`raw`、`unknown` 会以不同 Prompt Bubble 展示；重复且相同的 system prompt 在首次完整显示后折叠为摘要。
+- 历史 assistant/tool 活动保留在 Prompt Turn 的原始 request/response 数据中，但不进入主时间线；tool definitions 不创建 Prompt Bubble，实际 tool calls 会合并为 `tool_call` Bubble。
 - 点击 Prompt Bubble 后，右侧详情抽屉展示元数据、Safe Request Headers、当前气泡 JSON、完整 request/response JSON。
 - SSE 断线重连后，页面会重新拉取当天日志并去重。
 
