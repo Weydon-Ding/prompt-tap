@@ -89,3 +89,155 @@ h1 {
   font-size: 1.2rem;
   font-weight: 700;
 }
+
+.timeline-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  gap: 20px;
+  align-items: start;
+  margin-top: 28px;
+}
+
+.timeline {
+  display: grid;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prompt-turn {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 18px;
+}
+
+.turn-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+}
+
+.turn-meta span {
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #f1f5f9;
+}
+
+.bubble-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.prompt-bubble {
+  max-width: min(720px, 88%);
+  border: 1px solid #dbe5f3;
+  border-radius: 20px;
+  padding: 14px 16px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.prompt-bubble--user {
+  justify-self: start;
+  background: #eff6ff;
+}
+
+.prompt-bubble--assistant {
+  justify-self: end;
+  background: #f8fafc;
+}
+
+.bubble-role {
+  color: #334155;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.prompt-bubble:hover,
+.prompt-bubble[aria-pressed="true"] {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 24px rgb(37 99 235 / 12%);
+}
+
+.prompt-bubble:focus-visible {
+  outline: 3px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.bubble-content {
+  display: block;
+  margin: 8px 0 0;
+  color: #172033;
+  white-space: pre-wrap;
+}
+
+.bubble-details {
+  position: sticky;
+  top: 24px;
+  border: 1px solid #dbe5f3;
+  border-radius: 18px;
+  padding: 18px;
+  background: #f8fafc;
+}
+
+.bubble-details h3 {
+  margin: 0 0 12px;
+  color: #111827;
+}
+
+.bubble-details dl,
+.bubble-details div {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.bubble-details div + div {
+  margin-top: 14px;
+}
+
+.bubble-details dt {
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.bubble-details dd {
+  margin: 0;
+  color: #172033;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.empty-state,
+.empty-turn {
+  margin-top: 24px;
+  border-radius: 16px;
+  padding: 18px;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.empty-turn,
+.bubble-details.empty-state {
+  margin-top: 0;
+}
+
+@media (max-width: 760px) {
+  .timeline-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .bubble-details {
+    position: static;
+  }
+}
