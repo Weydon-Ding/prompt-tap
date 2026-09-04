@@ -1,9 +1,26 @@
 import { useEffect, useState } from 'react';
 
+type PromptBubble = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+type PromptTurn = {
+  request_id: string;
+  timestamp?: string;
+  path?: string;
+  bubbles: PromptBubble[];
+};
+
+type SelectedPromptBubble = {
+  turn: PromptTurn;
+  bubble: PromptBubble;
+};
+
 type TodayResponse = {
   date: string;
   log_exists: boolean;
-  turns: unknown[];
+  turns: PromptTurn[];
   message: string;
 };
 
@@ -12,8 +29,91 @@ type LoadState =
   | { status: 'ready'; data: TodayResponse }
   | { status: 'error'; message: string };
 
+function PromptBubbleView({
+  bubble,
+  isSelected,
+  onSelect,
+}: {
+  bubble: PromptBubble;
+  isSelected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      aria-pressed={isSelected}
+      className={`prompt-bubble prompt-bubble--${bubble.role}`}
+      type="button"
+      onClick={onSelect}
+    >
+      <span className="bubble-role">{bubble.role}</span>
+      <span className="bubble-content">{bubble.content || 'No displayable content captured.'}</span>
+    </button>
+  );
+}
+
+function PromptTurnView({
+  selectedBubble,
+  turn,
+  onSelectBubble,
+}: {
+  selectedBubble: SelectedPromptBubble | null;
+  turn: PromptTurn;
+  onSelectBubble: (selection: SelectedPromptBubble) => void;
+}) {
+  return (
+    <li className="prompt-turn">
+      <div className="turn-meta">
+        <span>{turn.timestamp ?? 'Unknown time'}</span>
+        <span>{turn.path ?? 'Unknown path'}</span>
+        <span>{turn.request_id}</span>
+      </div>
+      <div className="bubble-stack">
+        {turn.bubbles.length > 0 ? (
+          turn.bubbles.map((bubble, index) => (
+            <PromptBubbleView
+              key={`${turn.request_id}-${bubble.role}-${index}`}
+              bubble={bubble}
+              isSelected={selectedBubble?.turn.request_id === turn.request_id && selectedBubble.bubble === bubble}
+              onSelect={() => onSelectBubble({ turn, bubble })}
+            />
+          ))
+        ) : (
+          <p className="empty-turn">No user or assistant Prompt Bubble could be extracted.</p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function PromptBubbleDetails({ selection }: { selection: SelectedPromptBubble | null }) {
+  if (!selection) {
+    return <div className="bubble-details empty-state">Select a Prompt Bubble to inspect it.</div>;
+  }
+
+  return (
+    <aside className="bubble-details">
+      <h3>Prompt Bubble</h3>
+      <dl>
+        <div>
+          <dt>Role</dt>
+          <dd>{selection.bubble.role}</dd>
+        </div>
+        <div>
+          <dt>Request ID</dt>
+          <dd>{selection.turn.request_id}</dd>
+        </div>
+        <div>
+          <dt>Content</dt>
+          <dd>{selection.bubble.content || 'No displayable content captured.'}</dd>
+        </div>
+      </dl>
+    </aside>
+  );
+}
+
 export function App() {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [selectedBubble, setSelectedBubble] = useState<SelectedPromptBubble | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,7 +164,7 @@ export function App() {
 
         {state.status === 'ready' ? (
           <div>
-            <h2>{state.data.log_exists ? 'Today API connected' : 'No Prompt Log yet'}</h2>
+            <h2>{state.data.log_exists ? 'Today Prompt Turns' : 'No Prompt Log yet'}</h2>
             <p>{state.data.message}</p>
             <dl className="facts">
               <div>
@@ -76,6 +176,24 @@ export function App() {
                 <dd>{state.data.turns.length}</dd>
               </div>
             </dl>
+
+            {state.data.turns.length > 0 ? (
+              <div className="timeline-layout">
+                <ol className="timeline" aria-label="Today Prompt Turns">
+                  {state.data.turns.map((turn) => (
+                    <PromptTurnView
+                      key={turn.request_id}
+                      selectedBubble={selectedBubble}
+                      turn={turn}
+                      onSelectBubble={setSelectedBubble}
+                    />
+                  ))}
+                </ol>
+                <PromptBubbleDetails selection={selectedBubble} />
+              </div>
+            ) : (
+              <div className="empty-state">Today&apos;s timeline is empty.</div>
+            )}
           </div>
         ) : null}
       </section>
