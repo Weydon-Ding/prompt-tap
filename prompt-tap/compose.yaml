@@ -12,3 +12,31 @@ services:
       - ./logs:/logs
     ports:
       - "127.0.0.1:8888:8080"
+
+  prompt-tap-web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: prompt-tap-web
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LOG_DIR: /logs
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./logs:/logs:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  prompt-tap-ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    container_name: prompt-tap-ui
+    restart: unless-stopped
+    depends_on:
+      - prompt-tap-web
+    ports:
+      - "127.0.0.1:5173:5173"

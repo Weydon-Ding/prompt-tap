@@ -1,5 +1,7 @@
 prompt-tap/logs/
 prompt-tap/.env
+prompt-tap/ui/node_modules/
+prompt-tap/ui/dist/
 .superpowers/
 __pycache__/
 *.py[cod]

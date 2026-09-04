@@ -20,16 +20,15 @@ prompt-tap/
 │   ├── Dockerfile
 │   ├── app.py
 │   ├── config.py
-│   ├── log_reader.py
-│   ├── normalizer.py
-│   └── events.py
+│   └── log_reader.py
 ├── ui/
+│   ├── Dockerfile
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
 └── tests/
-    ├── fixtures/
-    └── test_log_prompts.py
+    ├── test_log_prompts.py
+    └── test_web_app.py
 ```
 
 ## 配置
@@ -86,9 +85,10 @@ UI_TAIL_INTERVAL_SECONDS=1
 docker compose up -d --build
 ```
 
-默认会启动两个服务：
+默认会启动三个服务：
 
 - `prompt-tap`：代理入口 `http://127.0.0.1:8888/v1`。
+- `prompt-tap-web`：Web UI 后端 `http://127.0.0.1:8000`，提供 `/healthz` 和 `/api/today`。
 - `prompt-tap-ui`：Prompt Tap Web UI `http://127.0.0.1:5173`。
 
 查看状态：
@@ -228,7 +228,7 @@ Prompt Tap Web UI 提供聊天式 Prompt Log 查看器：
 停止容器：
 
 ```bash
-docker compose stop prompt-tap prompt-tap-ui
+docker compose stop prompt-tap prompt-tap-web prompt-tap-ui
 ```
 
 清理 Prompt Log（POSIX shell）：
