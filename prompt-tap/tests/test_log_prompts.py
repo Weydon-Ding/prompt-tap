@@ -141,6 +141,7 @@ def test_response_record_uses_minimal_summary():
         "path": "/v1/responses",
         "status_code": 201,
         "duration_ms": 1250.0,
+        "response_body_capture": False,
     }
 
 
@@ -153,6 +154,7 @@ def test_response_record_does_not_include_body_by_default():
 
     record = log_prompts.build_response_record(flow)
 
+    assert record["response_body_capture"] is False
     assert "payload" not in record
     assert "raw_body" not in record
     assert "body_truncated" not in record
@@ -168,6 +170,7 @@ def test_response_record_captures_json_body_when_enabled():
 
     record = log_prompts.build_response_record(flow, config=config)
 
+    assert record["response_body_capture"] is True
     assert record["payload"] == {"choices": [{"message": {"content": "hi"}}]}
     assert record["parse_error"] is None
     assert record["body_truncated"] is False

@@ -22,6 +22,10 @@ def create_app(config=DEFAULT_CONFIG):
     def today():
         return read_today(config.log_dir, config.max_turns, config.timezone)
 
+    @app.get("/api/config")
+    def web_config():
+        return {"tail_interval_seconds": config.tail_interval_seconds}
+
     return app
 
 

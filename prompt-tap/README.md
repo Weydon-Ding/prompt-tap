@@ -159,6 +159,7 @@ Prompt Log 写入 `logs/prompt-YYYY-MM-DD.jsonl`。request 与 response 分别�
 | `path` | 请求 path。 |
 | `status_code` | New API 返回的 HTTP 状态码。 |
 | `duration_ms` | 从 request hook 到 response hook 的耗时毫秒数。 |
+| `response_body_capture` | 有 response 时记录本次是否启用了响应正文捕获；为 `false` 时 Web UI 会显示 assistant placeholder。 |
 | `body_truncated` | 启用响应正文记录时，正文是否被 `MAX_RESPONSE_BODY_BYTES` 截断。 |
 | `payload` | 启用响应正文记录且 JSON 解析成功时的完整响应 JSON。 |
 | `parse_error` | 启用响应正文记录但 JSON 解析失败时的错误信息；解析成功时为 `null`。 |
@@ -170,7 +171,7 @@ Prompt Log 写入 `logs/prompt-YYYY-MM-DD.jsonl`。request 与 response 分别�
 WRITE_RESPONSE_BODY=false
 ```
 
-普通 JSON 响应会记录到 `payload`。`stream=true` 的 SSE 响应会以完整原始事件流记录到 `raw_body`，并在流结束后写入日志；它不是实时逐 token 输出。超出上限的正文会保留前段内容，并标记 `body_truncated=true`。
+普通 JSON 响应会记录到 `payload`。`stream=true` 的 SSE 响应会以完整原始事件流记录到 `raw_body`，并在流结束后写入日志；它不是实时逐 token 输出。超出上限的正文会保留前段内容，并标记 `body_truncated=true`。Web UI 对 SSE `raw_body` 做 best-effort 解析：可识别的文本和 tool call 会进入主时间线，无法解析或无法识别的 chunk 会进入 warning 列表，不阻断其他 chunk 展示。
 
 ## 查询日志
 
@@ -216,7 +217,10 @@ Prompt Tap Web UI 提供聊天式 Prompt Log 查看器：
 
 - 打开页面时加载当天最近 200 个 Prompt Turn。
 - 持续监听新增 Prompt Log，并自动追加或更新聊天流。
-- `system`、当前 `user`、`assistant`、`tool_call`、`raw`、`unknown` 会以不同 Prompt Bubble 展示；重复且相同的 system prompt 在首次完整显示后折叠为摘要。
+- `system`、当前 `user`、`assistant`、`tool_call`、`raw`、`unknown`、`pending`、`error` 会以不同 Prompt Bubble 展示；重复且相同的 system prompt 在首次完整显示后折叠为摘要。
+- request-only Prompt Turn 会显示 pending；pending 超过 30 秒时会提示 response record 可能缺失。
+- 关闭响应正文捕获时，已完成 response 会显示 assistant placeholder；4xx/5xx response 会显示 error Prompt Bubble。
+- Prompt Turn 小元信息展示 request model、status、duration 和去掉 query string 的 display path；TopBar summary 展示 warning 数量，warning 详情显示在主时间线外。
 - 历史 assistant/tool 活动保留在 Prompt Turn 的原始 request/response 数据中，但不进入主时间线；tool definitions 不创建 Prompt Bubble，实际 tool calls 会合并为 `tool_call` Bubble。
 - 点击 Prompt Bubble 后，右侧详情抽屉展示元数据、Safe Request Headers、当前气泡 JSON、完整 request/response JSON。
 - SSE 断线重连后，页面会重新拉取当天日志并去重。
