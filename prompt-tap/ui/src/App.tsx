@@ -1,16 +1,39 @@
 import { useEffect, useState } from 'react';
 
 type PromptBubble = {
-  role: 'user' | 'assistant';
+  role: string;
   content: string;
 };
+
+const PROMPT_BUBBLE_ROLE_CLASS_NAMES = new Set([
+  'assistant',
+  'raw',
+  'system',
+  'tool_call',
+  'unknown',
+  'user',
+]);
+
+function promptBubbleRoleClassName(role: string) {
+  return PROMPT_BUBBLE_ROLE_CLASS_NAMES.has(role) ? role : 'unknown';
+}
 
 type PromptTurn = {
   request_id: string;
   timestamp?: string;
   path?: string;
+  request?: unknown;
+  response?: unknown;
   bubbles: PromptBubble[];
 };
+
+function formatJson(value: unknown) {
+  if (value === undefined || value === null) {
+    return 'Not captured.';
+  }
+
+  return JSON.stringify(value, null, 2);
+}
 
 type SelectedPromptBubble = {
   turn: PromptTurn;
@@ -41,7 +64,7 @@ function PromptBubbleView({
   return (
     <button
       aria-pressed={isSelected}
-      className={`prompt-bubble prompt-bubble--${bubble.role}`}
+      className={`prompt-bubble prompt-bubble--${promptBubbleRoleClassName(bubble.role)}`}
       type="button"
       onClick={onSelect}
     >
@@ -78,7 +101,7 @@ function PromptTurnView({
             />
           ))
         ) : (
-          <p className="empty-turn">No user or assistant Prompt Bubble could be extracted.</p>
+          <p className="empty-turn">No Prompt Bubble could be extracted.</p>
         )}
       </div>
     </li>
@@ -105,6 +128,14 @@ function PromptBubbleDetails({ selection }: { selection: SelectedPromptBubble | 
         <div>
           <dt>Content</dt>
           <dd>{selection.bubble.content || 'No displayable content captured.'}</dd>
+        </div>
+        <div>
+          <dt>Request JSON</dt>
+          <dd>{formatJson(selection.turn.request)}</dd>
+        </div>
+        <div>
+          <dt>Response JSON</dt>
+          <dd>{formatJson(selection.turn.response)}</dd>
         </div>
       </dl>
     </aside>
