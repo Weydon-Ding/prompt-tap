@@ -1,4 +1,5 @@
 import importlib
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,14 @@ def load_app_module():
     finally:
         sys.path.remove(str(PROJECT_PATH))
 
+
+def load_log_reader_module():
+    sys.path.insert(0, str(PROJECT_PATH))
+    try:
+        return importlib.import_module("web.log_reader")
+    finally:
+        sys.path.remove(str(PROJECT_PATH))
+
 def test_healthz_returns_ok():
     web_app = load_app_module()
     client = TestClient(web_app.create_app())
@@ -25,6 +34,17 @@ def test_healthz_returns_ok():
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+def test_config_returns_tail_interval_seconds(tmp_path):
+    web_app = load_app_module()
+    app = web_app.create_app(config=web_app.WebConfig(log_dir=tmp_path, tail_interval_seconds=2.5))
+    client = TestClient(app)
+
+    response = client.get("/api/config")
+
+    assert response.status_code == 200
+    assert response.json() == {"tail_interval_seconds": 2.5}
+
 
 def test_today_returns_empty_state_when_prompt_log_is_missing(tmp_path):
     web_app = load_app_module()
@@ -38,6 +58,7 @@ def test_today_returns_empty_state_when_prompt_log_is_missing(tmp_path):
         "date": response.json()["date"],
         "log_exists": False,
         "turns": [],
+        "warnings": [],
         "message": "No Prompt Log found for today. Point your app OpenAI Base URL to http://127.0.0.1:8888/v1 to start capturing prompts.",
     }
 
@@ -83,12 +104,21 @@ def test_today_returns_recent_prompt_turns_from_prompt_log_records(tmp_path):
                     "status_code": 200,
                     "payload": {"choices": [{"message": {"role": "assistant", "content": "Latest"}}]},
                 },
+                "status": "complete",
+                "metadata": {
+                    "model": None,
+                    "status": "complete",
+                    "duration_ms": None,
+                    "display_path": "/v1/chat/completions",
+                },
+                "warnings": [],
                 "bubbles": [
                     {"role": "user", "content": "Recent"},
                     {"role": "assistant", "content": "Latest"},
                 ],
             }
         ],
+        "warnings": [],
         "message": "Prompt Log found. Showing today's recent Prompt Turns.",
     }
 
@@ -156,6 +186,14 @@ def test_today_skips_unexpected_record_shapes(tmp_path):
             "path": None,
             "request": None,
             "response": {"type": "response", "request_id": "request-1", "raw_body": {"bad": "body"}},
+            "status": "complete",
+            "metadata": {
+                "model": None,
+                "status": "complete",
+                "duration_ms": None,
+                "display_path": None,
+            },
+            "warnings": [],
             "bubbles": [],
         }
     ]
@@ -182,7 +220,10 @@ def test_today_uses_latest_records_for_repeated_request_id(tmp_path):
     assert response.status_code == 200
     assert response.json()["turns"][0]["request_id"] == "reused"
     assert response.json()["turns"][0]["response"] is None
-    assert response.json()["turns"][0]["bubbles"] == [{"role": "user", "content": "New"}]
+    assert response.json()["turns"][0]["bubbles"] == [
+        {"role": "user", "content": "New"},
+        {"role": "pending", "content": "Waiting for response."},
+    ]
 
 
 def test_today_merges_streaming_response_into_assistant_bubble(tmp_path):
@@ -229,6 +270,7 @@ def test_today_normalizes_request_roles_and_excludes_history(tmp_path):
     assert turn["bubbles"] == [
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Current input"},
+        {"role": "pending", "content": "Waiting for response."},
     ]
 
 
@@ -298,8 +340,14 @@ def test_today_renders_raw_or_unknown_bubbles_for_non_chat_payloads(tmp_path):
 
     assert response.status_code == 200
     turns = response.json()["turns"]
-    assert turns[0]["bubbles"] == [{"role": "raw", "content": "Summarize this"}]
-    assert turns[1]["bubbles"] == [{"role": "unknown", "content": '{"model": "embed", "dimensions": 3}'}]
+    assert turns[0]["bubbles"] == [
+        {"role": "raw", "content": "Summarize this"},
+        {"role": "pending", "content": "Waiting for response."},
+    ]
+    assert turns[1]["bubbles"] == [
+        {"role": "unknown", "content": '{"model": "embed", "dimensions": 3}'},
+        {"role": "pending", "content": "Waiting for response."},
+    ]
 
 
 def test_today_represents_multiple_response_choices_separately(tmp_path):
@@ -389,6 +437,7 @@ def test_today_renders_top_level_anthropic_system_prompt(tmp_path):
     assert response.json()["turns"][0]["bubbles"] == [
         {"role": "system", "content": "Use terse answers."},
         {"role": "user", "content": "Hi"},
+        {"role": "pending", "content": "Waiting for response."},
     ]
 
 
@@ -406,7 +455,9 @@ def test_today_does_not_render_tool_definition_only_payload(tmp_path):
     response = client.get("/api/today")
 
     assert response.status_code == 200
-    assert response.json()["turns"][0]["bubbles"] == []
+    assert response.json()["turns"][0]["bubbles"] == [
+        {"role": "pending", "content": "Waiting for response."},
+    ]
 
 
 def test_today_groups_streaming_tool_calls_into_tool_call_bubble(tmp_path):
@@ -516,7 +567,9 @@ def test_today_ignores_tool_definition_only_payload_with_metadata(tmp_path):
     response = client.get("/api/today")
 
     assert response.status_code == 200
-    assert response.json()["turns"][0]["bubbles"] == []
+    assert response.json()["turns"][0]["bubbles"] == [
+        {"role": "pending", "content": "Waiting for response."},
+    ]
 
 
 def test_today_handles_mixed_streaming_tool_events_without_crashing(tmp_path):
@@ -556,7 +609,9 @@ def test_today_ignores_tool_definition_only_payload_with_common_metadata(tmp_pat
     response = client.get("/api/today")
 
     assert response.status_code == 200
-    assert response.json()["turns"][0]["bubbles"] == []
+    assert response.json()["turns"][0]["bubbles"] == [
+        {"role": "pending", "content": "Waiting for response."},
+    ]
 
 
 def test_today_skips_tool_result_only_user_messages_when_selecting_current_input(tmp_path):
@@ -575,6 +630,7 @@ def test_today_skips_tool_result_only_user_messages_when_selecting_current_input
     assert response.status_code == 200
     assert response.json()["turns"][0]["bubbles"] == [
         {"role": "user", "content": "Find weather"},
+        {"role": "pending", "content": "Waiting for response."},
     ]
 
 
@@ -594,6 +650,7 @@ def test_today_falls_back_to_input_when_messages_have_no_user_prompt(tmp_path):
     assert response.status_code == 200
     assert response.json()["turns"][0]["bubbles"] == [
         {"role": "raw", "content": "actual input"},
+        {"role": "pending", "content": "Waiting for response."},
     ]
 
 
@@ -780,7 +837,9 @@ def test_today_ignores_tool_definition_payload_with_empty_messages(tmp_path):
     response = client.get("/api/today")
 
     assert response.status_code == 200
-    assert response.json()["turns"][0]["bubbles"] == []
+    assert response.json()["turns"][0]["bubbles"] == [
+        {"role": "pending", "content": "Waiting for response."},
+    ]
 
 
 def test_today_unknown_payload_omits_tool_definitions_from_bubble(tmp_path):
@@ -799,6 +858,7 @@ def test_today_unknown_payload_omits_tool_definitions_from_bubble(tmp_path):
     assert response.status_code == 200
     assert response.json()["turns"][0]["bubbles"] == [
         {"role": "unknown", "content": '{"custom": "value"}'},
+        {"role": "pending", "content": "Waiting for response."},
     ]
 
 
@@ -821,4 +881,352 @@ def test_today_does_not_skip_user_message_with_mixed_tool_result_content(tmp_pat
             "role": "user",
             "content": '{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Sunny"}\n"Now answer me"',
         },
+        {"role": "pending", "content": "Waiting for response."},
+    ]
+
+
+def test_today_marks_request_only_turn_as_pending_with_metadata(tmp_path):
+    web_app = load_app_module()
+    log_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    log_path = tmp_path / f"prompt-{log_date}.jsonl"
+    log_path.write_text(
+        json.dumps({
+            "type": "request",
+            "request_id": "request-1",
+            "timestamp": f"{log_date}T23:59:59+0800",
+            "path": "/v1/chat/completions?debug=true",
+            "payload": {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        }),
+        encoding="utf-8",
+    )
+    app = web_app.create_app(config=web_app.WebConfig(log_dir=tmp_path))
+    client = TestClient(app)
+
+    response = client.get("/api/today")
+
+    assert response.status_code == 200
+    turn = response.json()["turns"][0]
+    assert turn["status"] == "pending"
+    assert turn["metadata"] == {
+        "model": "gpt-4o-mini",
+        "status": "pending",
+        "duration_ms": None,
+        "display_path": "/v1/chat/completions",
+    }
+    assert turn["bubbles"] == [
+        {"role": "user", "content": "Hello"},
+        {"role": "pending", "content": "Waiting for response."},
+    ]
+
+
+def test_today_marks_stale_pending_turn_as_missing_response():
+    log_reader = load_log_reader_module()
+    request_timestamp = datetime(2026, 9, 7, 10, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    now = datetime(2026, 9, 7, 10, 0, 31, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    turns = log_reader.merge_prompt_turns(
+        [
+            {
+                "type": "request",
+                "request_id": "request-1",
+                "timestamp": request_timestamp.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "path": "/v1/chat/completions",
+                "payload": {"messages": [{"role": "user", "content": "Hello"}]},
+            }
+        ],
+        max_turns=1,
+        now=now,
+    )
+
+    turn = turns[0]
+    assert turn["status"] == "missing_response"
+    assert turn["metadata"]["status"] == "missing_response"
+    assert turn["bubbles"][-1] == {
+        "role": "pending",
+        "content": "Response has been pending for more than 30 seconds. The response record may be missing.",
+    }
+
+
+def test_today_adds_placeholder_when_response_body_capture_is_disabled(tmp_path):
+    web_app = load_app_module()
+    log_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    log_path = tmp_path / f"prompt-{log_date}.jsonl"
+    log_path.write_text(
+        "\n".join([
+            json.dumps({
+                "type": "request",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:00+0800",
+                "path": "/v1/chat/completions",
+                "payload": {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            }),
+            json.dumps({
+                "type": "response",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:01+0800",
+                "path": "/v1/chat/completions",
+                "status_code": 200,
+                "duration_ms": 1250.0,
+                "response_body_capture": False,
+            }),
+        ]),
+        encoding="utf-8",
+    )
+    app = web_app.create_app(config=web_app.WebConfig(log_dir=tmp_path))
+    client = TestClient(app)
+
+    response = client.get("/api/today")
+
+    assert response.status_code == 200
+    turn = response.json()["turns"][0]
+    assert turn["status"] == "response_body_disabled"
+    assert turn["metadata"] == {
+        "model": "gpt-4o-mini",
+        "status": "response_body_disabled",
+        "duration_ms": 1250.0,
+        "display_path": "/v1/chat/completions",
+    }
+    assert turn["bubbles"] == [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": "Response body capture is disabled. Enable WRITE_RESPONSE_BODY to inspect assistant content.",
+        },
+    ]
+
+
+def test_today_adds_error_bubble_for_error_response(tmp_path):
+    web_app = load_app_module()
+    log_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    log_path = tmp_path / f"prompt-{log_date}.jsonl"
+    log_path.write_text(
+        "\n".join([
+            json.dumps({
+                "type": "request",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:00+0800",
+                "path": "/v1/chat/completions?trace=1",
+                "payload": {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            }),
+            json.dumps({
+                "type": "response",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:01+0800",
+                "path": "/v1/chat/completions?trace=1",
+                "status_code": 502,
+                "duration_ms": 500.0,
+                "raw_body": "Bad gateway",
+                "parse_error": "not json",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+    app = web_app.create_app(config=web_app.WebConfig(log_dir=tmp_path))
+    client = TestClient(app)
+
+    response = client.get("/api/today")
+
+    assert response.status_code == 200
+    turn = response.json()["turns"][0]
+    assert turn["status"] == "error"
+    assert turn["metadata"]["display_path"] == "/v1/chat/completions"
+    assert turn["bubbles"] == [
+        {"role": "user", "content": "Hello"},
+        {"role": "error", "content": "HTTP 502 response from New API.\nBad gateway"},
+    ]
+
+
+def test_today_does_not_mark_non_http_status_as_error(tmp_path):
+    web_app = load_app_module()
+    log_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    log_path = tmp_path / f"prompt-{log_date}.jsonl"
+    log_path.write_text(
+        "\n".join([
+            json.dumps({
+                "type": "request",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:00+0800",
+                "path": "/v1/chat/completions",
+                "payload": {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            }),
+            json.dumps({
+                "type": "response",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:01+0800",
+                "path": "/v1/chat/completions",
+                "status_code": 600,
+                "duration_ms": 500.0,
+                "payload": {"choices": [{"message": {"role": "assistant", "content": "Hi"}}]},
+            }),
+        ]),
+        encoding="utf-8",
+    )
+    app = web_app.create_app(config=web_app.WebConfig(log_dir=tmp_path))
+    client = TestClient(app)
+
+    response = client.get("/api/today")
+
+    assert response.status_code == 200
+    turn = response.json()["turns"][0]
+    assert turn["status"] == "complete"
+    assert turn["bubbles"] == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
+    ]
+
+
+
+def test_today_warns_for_streaming_choices_without_recognized_deltas(tmp_path):
+    web_app = load_app_module()
+    log_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    log_path = tmp_path / f"prompt-{log_date}.jsonl"
+    log_path.write_text(
+        "\n".join([
+            json.dumps({
+                "type": "request",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:00+0800",
+                "path": "/v1/chat/completions",
+                "payload": {"messages": [{"role": "user", "content": "Hello"}]},
+            }),
+            json.dumps({
+                "type": "response",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:01+0800",
+                "path": "/v1/chat/completions",
+                "status_code": 200,
+                "raw_body": "data: {\"choices\":[{\"delta\":{\"foo\":\"bar\"}}]}\n",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+    app = web_app.create_app(config=web_app.WebConfig(log_dir=tmp_path))
+    client = TestClient(app)
+
+    response = client.get("/api/today")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["warnings"] == [
+        {
+            "request_id": "request-1",
+            "message": "SSE chunk did not match a recognized response shape.",
+            "chunk": '{"choices":[{"delta":{"foo":"bar"}}]}',
+        },
+    ]
+    assert data["turns"][0]["bubbles"] == [
+        {"role": "user", "content": "Hello"},
+    ]
+
+
+def test_today_does_not_warn_for_known_sse_lifecycle_chunks(tmp_path):
+    web_app = load_app_module()
+    log_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    log_path = tmp_path / f"prompt-{log_date}.jsonl"
+    raw_body = "\n".join([
+        'data: {"type":"message_start","message":{"id":"msg-1","type":"message","role":"assistant","content":[]}}',
+        'data: {"type":"ping"}',
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+        'data: {"type":"content_block_stop","index":0}',
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}',
+        'data: {"type":"message_stop"}',
+        'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+        'data: [DONE]',
+    ])
+    log_path.write_text(
+        "\n".join([
+            json.dumps({
+                "type": "request",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:00+0800",
+                "path": "/v1/messages",
+                "payload": {"messages": [{"role": "user", "content": "Hello"}]},
+            }),
+            json.dumps({
+                "type": "response",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:01+0800",
+                "path": "/v1/messages",
+                "status_code": 200,
+                "raw_body": raw_body,
+            }),
+        ]),
+        encoding="utf-8",
+    )
+    app = web_app.create_app(config=web_app.WebConfig(log_dir=tmp_path))
+    client = TestClient(app)
+
+    response = client.get("/api/today")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["warnings"] == []
+    assert data["turns"][0]["bubbles"] == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
+    ]
+
+
+
+def test_today_reports_sse_warnings_outside_main_timeline(tmp_path):
+    web_app = load_app_module()
+    log_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    log_path = tmp_path / f"prompt-{log_date}.jsonl"
+    log_path.write_text(
+        "\n".join([
+            json.dumps({
+                "type": "request",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:00+0800",
+                "path": "/v1/chat/completions",
+                "payload": {"messages": [{"role": "user", "content": "Hello"}]},
+            }),
+            json.dumps({
+                "type": "response",
+                "request_id": "request-1",
+                "timestamp": "2026-09-07T10:00:01+0800",
+                "path": "/v1/chat/completions",
+                "status_code": 200,
+                "raw_body": "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: not-json\n\ndata: {\"unexpected\":true}\n\ndata: [DONE]\n",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+    app = web_app.create_app(config=web_app.WebConfig(log_dir=tmp_path))
+    client = TestClient(app)
+
+    response = client.get("/api/today")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["warnings"] == [
+        {
+            "request_id": "request-1",
+            "message": "SSE chunk could not be parsed as JSON.",
+            "chunk": "not-json",
+        },
+        {
+            "request_id": "request-1",
+            "message": "SSE chunk did not match a recognized response shape.",
+            "chunk": '{"unexpected":true}',
+        },
+    ]
+    turn = data["turns"][0]
+    assert turn["warnings"] == data["warnings"]
+    assert turn["bubbles"] == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
     ]

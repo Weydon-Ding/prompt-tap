@@ -143,7 +143,11 @@ def build_response_record(flow, now=None, config=CONFIG):
         "duration_ms": duration_ms,
     }
 
-    if not config.write_response_body or not flow.response:
+    if not flow.response:
+        return record
+
+    record["response_body_capture"] = config.write_response_body
+    if not config.write_response_body:
         return record
 
     raw_content = flow.response.raw_content
