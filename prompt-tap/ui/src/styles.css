@@ -176,17 +176,17 @@ h1 {
 }
 
 .prompt-bubble--user {
-  justify-self: start;
+  justify-self: end;
   background: #eff6ff;
 }
 
 .prompt-bubble--assistant {
-  justify-self: end;
+  justify-self: start;
   background: #f8fafc;
 }
 
 .prompt-bubble--pending {
-  justify-self: end;
+  justify-self: start;
   background: #f1f5f9;
   border-style: dashed;
   color: #64748b;
