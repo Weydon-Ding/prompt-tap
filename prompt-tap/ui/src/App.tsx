@@ -1,22 +1,15 @@
 import { useEffect, useState } from 'react';
 
-type PromptBubble = {
-  role: string;
-  content: string;
-};
-
-type PromptWarning = {
-  request_id: string;
-  message: string;
-  chunk?: string;
-};
-
-type PromptTurnMetadata = {
-  model?: string | null;
-  status?: string | null;
-  duration_ms?: number | null;
-  display_path?: string | null;
-};
+import {
+  loadTodayState,
+  mergePromptTurnState,
+  promptBubbleId,
+  type LoadState,
+  type PromptBubble,
+  type PromptTurn,
+  type PromptWarning,
+  type TodayResponse,
+} from './liveUpdates';
 
 const PROMPT_BUBBLE_ROLE_CLASS_NAMES = new Set([
   'assistant',
@@ -32,18 +25,6 @@ const PROMPT_BUBBLE_ROLE_CLASS_NAMES = new Set([
 function promptBubbleRoleClassName(role: string) {
   return PROMPT_BUBBLE_ROLE_CLASS_NAMES.has(role) ? role : 'unknown';
 }
-
-type PromptTurn = {
-  request_id: string;
-  timestamp?: string | null;
-  path?: string | null;
-  request?: unknown;
-  response?: unknown;
-  status?: string;
-  metadata?: PromptTurnMetadata;
-  warnings?: PromptWarning[];
-  bubbles: PromptBubble[];
-};
 
 function formatJson(value: unknown) {
   if (value === undefined || value === null) {
@@ -83,34 +64,6 @@ type SelectedPromptBubble = {
   turn: PromptTurn;
   bubble: PromptBubble;
 };
-
-type TodayResponse = {
-  date: string;
-  log_exists: boolean;
-  turns: PromptTurn[];
-  warnings?: PromptWarning[];
-  message: string;
-};
-
-type WebConfigResponse = {
-  tail_interval_seconds: number;
-};
-
-const DEFAULT_TAIL_INTERVAL_SECONDS = 1;
-
-function tailIntervalMs(config: WebConfigResponse | null) {
-  const intervalSeconds = config?.tail_interval_seconds ?? DEFAULT_TAIL_INTERVAL_SECONDS;
-  if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
-    return DEFAULT_TAIL_INTERVAL_SECONDS * 1000;
-  }
-
-  return intervalSeconds * 1000;
-}
-
-type LoadState =
-  | { status: 'loading' }
-  | { status: 'ready'; data: TodayResponse }
-  | { status: 'error'; message: string };
 
 function PromptBubbleView({
   bubble,
@@ -159,7 +112,7 @@ function PromptTurnView({
         {turn.bubbles.length > 0 ? (
           turn.bubbles.map((bubble, index) => (
             <PromptBubbleView
-              key={`${turn.request_id}-${bubble.role}-${index}`}
+              key={promptBubbleId(turn, bubble, index)}
               bubble={bubble}
               isSelected={selectedBubble?.turn.request_id === turn.request_id && selectedBubble.bubble === bubble}
               onSelect={() => onSelectBubble({ turn, bubble })}
@@ -246,7 +199,7 @@ function PromptBubbleDetails({ selection }: { selection: SelectedPromptBubble | 
 }
 
 export function App() {
-  const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [state, setState] = useState<LoadState>({ status: 'loading', pendingTurns: [] });
   const [selectedBubble, setSelectedBubble] = useState<SelectedPromptBubble | null>(null);
 
   useEffect(() => {
@@ -262,42 +215,33 @@ export function App() {
         })
         .then((data) => {
           if (!cancelled) {
-            setState({ status: 'ready', data });
+            setState((current) => loadTodayState(current, data));
           }
         })
         .catch((error: unknown) => {
           if (!cancelled) {
             const message = error instanceof Error ? error.message : 'Unable to load today Prompt Log.';
-            setState({ status: 'error', message });
+            setState((current) => ({
+              status: 'error',
+              message,
+              pendingTurns: current.status === 'ready' ? current.data.turns : current.pendingTurns,
+            }));
           }
         });
     }
 
-    let refreshTimer: number | undefined;
-
-    function loadConfig() {
-      return fetch('/api/config')
-        .then((response) => {
-          if (!response.ok) {
-            throw new Error(`Config API returned ${response.status}`);
-          }
-          return response.json() as Promise<WebConfigResponse>;
-        })
-        .catch(() => null);
-    }
+    const events = new EventSource('/api/events');
+    events.addEventListener('open', loadToday);
+    events.addEventListener('prompt_turn', (event) => {
+      const turn = JSON.parse((event as MessageEvent<string>).data) as PromptTurn;
+      setState((current) => mergePromptTurnState(current, turn));
+    });
 
     loadToday();
-    loadConfig().then((config) => {
-      if (!cancelled) {
-        refreshTimer = window.setInterval(loadToday, tailIntervalMs(config));
-      }
-    });
 
     return () => {
       cancelled = true;
-      if (refreshTimer !== undefined) {
-        window.clearInterval(refreshTimer);
-      }
+      events.close();
     };
   }, []);
 
