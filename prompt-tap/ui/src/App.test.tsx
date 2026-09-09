@@ -1,7 +1,21 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { expect, test, vi } from 'vitest';
+import { beforeEach, expect, test, vi } from 'vitest';
 import { App } from './App';
+
+let events: EventTarget & { close: ReturnType<typeof vi.fn> };
+
+beforeEach(() => {
+  class TestEventSource extends EventTarget {
+    close = vi.fn();
+
+    constructor() {
+      super();
+      events = this;
+    }
+  }
+  vi.stubGlobal('EventSource', TestEventSource);
+});
 
 function makeTurn() {
   return {
@@ -34,6 +48,17 @@ function showApp(turn = makeTurn()) {
   render(<App />);
   return userEvent.setup();
 }
+
+test('卸载页面会关闭 SSE 连接', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({
+    ok: true,
+    json: async () => ({ date: '2026-09-09', log_exists: false, turns: [], message: 'Empty' }),
+  })));
+  const { unmount } = render(<App />);
+  await screen.findByText('Empty');
+  unmount();
+  expect(events.close).toHaveBeenCalledOnce();
+});
 
 test('详情展示完整请求元信息、含 query 的路径和 Safe Request Headers', async () => {
   const user = showApp();
@@ -72,31 +97,34 @@ test('点击 Prompt Bubble 打开具名详情抽屉且保留时间线', async ()
   expect(screen.getByRole('list', { name: 'Today Prompt Turns' })).toBeVisible();
 });
 
-test('轮询同步详情且不抢焦点，角色变化后可恢复焦点，目标消失时关闭', async () => {
-  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-  let turn = makeTurn();
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
-    ok: true,
-    json: async () => url === '/api/config'
-      ? { tail_interval_seconds: 1 }
-      : { date: '2026-09-08', log_exists: true, message: 'Recent turns', turns: [turn] },
-  })));
-  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-  render(<App />);
-  await act(async () => {});
-  await user.click(screen.getByRole('button', { name: /user\s*Hello/ }));
-  const json = screen.getByLabelText('Current Bubble JSON');
-  json.focus();
-  turn = { ...turn, bubbles: [{ role: 'assistant', content: 'Updated Hello' }] };
-  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+test('SSE 更新同步详情且不抢焦点，pending 完成后关闭可恢复焦点', async () => {
+  const turn = { ...makeTurn(), response: null, bubbles: [{ role: 'pending', content: 'Waiting' }] };
+  const user = showApp(turn);
+  await user.click(await screen.findByRole('button', { name: /pending\s*Waiting/ }));
+  const closeButton = screen.getByRole('button', { name: '关闭详情' });
+  const updated = { ...makeTurn(), bubbles: [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Updated Hello' }] };
+  await act(async () => {
+    events.dispatchEvent(new MessageEvent('prompt_turn', { data: JSON.stringify(updated) }));
+  });
   expect(within(screen.getByRole('complementary', { name: 'Prompt Bubble 详情' })).getByText('Updated Hello')).toBeVisible();
-  expect(json).toHaveFocus();
+  expect(closeButton).toHaveFocus();
+  expect(screen.getByLabelText('Response JSON')).toBeVisible();
   await user.keyboard('{Escape}');
-  const updatedBubble = screen.getByRole('button', { name: /assistant\s*Updated Hello/ });
-  expect(updatedBubble).toHaveFocus();
-  await user.click(updatedBubble);
-  turn = { ...turn, bubbles: [] };
-  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(screen.getByRole('button', { name: /assistant\s*Updated Hello/ })).toHaveFocus();
+});
+
+test('SSE 重连重新加载且日期变化清除旧详情', async () => {
+  const user = showApp();
+  const bubble = await screen.findByRole('button', { name: /user\s*Hello/ });
+  await user.click(bubble);
+  const fetchToday = vi.mocked(fetch);
+  fetchToday.mockResolvedValue({
+    ok: true,
+    json: async () => ({ date: '2026-09-09', log_exists: false, turns: [], message: 'New day' }),
+  } as Response);
+  await act(async () => events.dispatchEvent(new Event('open')));
+  expect(fetchToday).toHaveBeenLastCalledWith('/api/today');
+  expect(screen.getByText('New day')).toBeVisible();
   expect(screen.queryByRole('complementary', { name: 'Prompt Bubble 详情' })).not.toBeInTheDocument();
 });
 

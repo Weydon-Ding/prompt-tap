@@ -1,22 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-type PromptBubble = {
-  role: string;
-  content: string;
-};
-
-type PromptWarning = {
-  request_id: string;
-  message: string;
-  chunk?: string;
-};
-
-type PromptTurnMetadata = {
-  model?: string | null;
-  status?: string | null;
-  duration_ms?: number | null;
-  display_path?: string | null;
-};
+import {
+  loadTodayState,
+  mergePromptTurnState,
+  promptBubbleId,
+  type LoadState,
+  type PromptBubble,
+  type PromptTurn,
+  type PromptWarning,
+  type TodayResponse,
+} from './liveUpdates';
 
 const PROMPT_BUBBLE_ROLE_CLASS_NAMES = new Set([
   'assistant',
@@ -32,18 +25,6 @@ const PROMPT_BUBBLE_ROLE_CLASS_NAMES = new Set([
 function promptBubbleRoleClassName(role: string) {
   return PROMPT_BUBBLE_ROLE_CLASS_NAMES.has(role) ? role : 'unknown';
 }
-
-type PromptTurn = {
-  request_id: string;
-  timestamp?: string | null;
-  path?: string | null;
-  request?: unknown;
-  response?: unknown;
-  status?: string;
-  metadata?: PromptTurnMetadata;
-  warnings?: PromptWarning[];
-  bubbles: PromptBubble[];
-};
 
 function recordFields(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -106,7 +87,7 @@ function promptTurnDisplayMetadata(turn: PromptTurn): PromptTurnDisplayMetadata 
 
 type SelectionKey = {
   requestId: string;
-  bubbleIndex: number;
+  bubbleId: string;
 };
 
 type SelectedPromptBubble = {
@@ -117,34 +98,6 @@ type SelectedPromptBubble = {
 
 type JsonSectionName = 'current' | 'request' | 'response';
 type CopyFeedback = { section: JsonSectionName; message: string; token: number };
-
-type TodayResponse = {
-  date: string;
-  log_exists: boolean;
-  turns: PromptTurn[];
-  warnings?: PromptWarning[];
-  message: string;
-};
-
-type WebConfigResponse = {
-  tail_interval_seconds: number;
-};
-
-const DEFAULT_TAIL_INTERVAL_SECONDS = 1;
-
-function tailIntervalMs(config: WebConfigResponse | null) {
-  const intervalSeconds = config?.tail_interval_seconds ?? DEFAULT_TAIL_INTERVAL_SECONDS;
-  if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
-    return DEFAULT_TAIL_INTERVAL_SECONDS * 1000;
-  }
-
-  return intervalSeconds * 1000;
-}
-
-type LoadState =
-  | { status: 'loading' }
-  | { status: 'ready'; data: TodayResponse }
-  | { status: 'error'; message: string };
 
 function PromptBubbleView({
   bubble,
@@ -193,10 +146,10 @@ function PromptTurnView({
         {turn.bubbles.length > 0 ? (
           turn.bubbles.map((bubble, index) => (
             <PromptBubbleView
-              key={`${turn.request_id}-${index}`}
+              key={promptBubbleId(turn, bubble, index)}
               bubble={bubble}
-              isSelected={selectedBubble?.key.requestId === turn.request_id && selectedBubble.key.bubbleIndex === index}
-              onSelect={() => onSelectBubble({ turn, bubble, key: { requestId: turn.request_id, bubbleIndex: index } })}
+              isSelected={selectedBubble?.key.bubbleId === promptBubbleId(turn, bubble, index)}
+              onSelect={() => onSelectBubble({ turn, bubble, key: { requestId: turn.request_id, bubbleId: promptBubbleId(turn, bubble, index) } })}
             />
           ))
         ) : (
@@ -239,7 +192,7 @@ function PromptBubbleDetails({ selection, onClose }: { selection: SelectedPrompt
       previousSelectionKey.current = null;
       return;
     }
-    const key = `${selection.key.requestId}:${selection.key.bubbleIndex}`;
+    const key = `${selection.key.requestId}:${selection.key.bubbleId}`;
     if (previousSelectionKey.current !== key) {
       closeButton.current?.focus();
       previousSelectionKey.current = key;
@@ -262,7 +215,7 @@ function PromptBubbleDetails({ selection, onClose }: { selection: SelectedPrompt
   useEffect(() => {
     const defaultSection = responseAvailable ? defaultJsonSection(selection?.bubble.role ?? 'unknown') : 'current';
     setOpenSections({ current: defaultSection === 'current', request: false, response: defaultSection === 'response' });
-  }, [selection?.key.requestId, selection?.key.bubbleIndex, selection?.bubble.role, responseAvailable]);
+  }, [selection?.key.requestId, selection?.key.bubbleId, selection?.bubble.role, responseAvailable]);
 
   if (!selection) return null;
 
@@ -338,7 +291,7 @@ function PromptBubbleDetails({ selection, onClose }: { selection: SelectedPrompt
 }
 
 export function App() {
-  const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [state, setState] = useState<LoadState>({ status: 'loading', pendingTurns: [] });
   const [selectedBubble, setSelectedBubble] = useState<SelectedPromptBubble | null>(null);
   const trigger = useRef<HTMLElement | null>(null);
   const closeDetails = useCallback(() => {
@@ -354,10 +307,11 @@ export function App() {
   useEffect(() => {
     if (state.status === 'ready' && selectedBubble) {
       const turn = state.data.turns.find((candidate) => candidate.request_id === selectedBubble.key.requestId);
-      if (!turn || !turn.bubbles[selectedBubble.key.bubbleIndex]) {
+      const bubble = turn?.bubbles.find((candidate, index) => promptBubbleId(turn, candidate, index) === selectedBubble.key.bubbleId);
+      if (!turn || !bubble) {
         setSelectedBubble(null);
-      } else if (turn !== selectedBubble.turn || turn.bubbles[selectedBubble.key.bubbleIndex] !== selectedBubble.bubble) {
-        setSelectedBubble({ turn, bubble: turn.bubbles[selectedBubble.key.bubbleIndex], key: selectedBubble.key });
+      } else if (turn !== selectedBubble.turn || bubble !== selectedBubble.bubble) {
+        setSelectedBubble({ turn, bubble, key: selectedBubble.key });
       }
     }
   }, [state, selectedBubble]);
@@ -375,42 +329,33 @@ export function App() {
         })
         .then((data) => {
           if (!cancelled) {
-            setState({ status: 'ready', data });
+            setState((current) => loadTodayState(current, data));
           }
         })
         .catch((error: unknown) => {
           if (!cancelled) {
             const message = error instanceof Error ? error.message : 'Unable to load today Prompt Log.';
-            setState({ status: 'error', message });
+            setState((current) => ({
+              status: 'error',
+              message,
+              pendingTurns: current.status === 'ready' ? current.data.turns : current.pendingTurns,
+            }));
           }
         });
     }
 
-    let refreshTimer: number | undefined;
-
-    function loadConfig() {
-      return fetch('/api/config')
-        .then((response) => {
-          if (!response.ok) {
-            throw new Error(`Config API returned ${response.status}`);
-          }
-          return response.json() as Promise<WebConfigResponse>;
-        })
-        .catch(() => null);
-    }
+    const events = new EventSource('/api/events');
+    events.addEventListener('open', loadToday);
+    events.addEventListener('prompt_turn', (event) => {
+      const turn = JSON.parse((event as MessageEvent<string>).data) as PromptTurn;
+      setState((current) => mergePromptTurnState(current, turn));
+    });
 
     loadToday();
-    loadConfig().then((config) => {
-      if (!cancelled) {
-        refreshTimer = window.setInterval(loadToday, tailIntervalMs(config));
-      }
-    });
 
     return () => {
       cancelled = true;
-      if (refreshTimer !== undefined) {
-        window.clearInterval(refreshTimer);
-      }
+      events.close();
     };
   }, []);
 
