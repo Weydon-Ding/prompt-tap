@@ -123,10 +123,6 @@ h1 {
 }
 
 .timeline-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-  gap: 20px;
-  align-items: start;
   margin-top: 28px;
 }
 
@@ -280,43 +276,149 @@ h1 {
   white-space: pre-wrap;
 }
 
+.shell--inspecting {
+  width: min(960px, calc(100% - 440px));
+  margin-left: max(0px, calc((100vw - 1400px) / 2));
+  margin-right: 440px;
+}
+
 .bubble-details {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 10;
+  inset: 0 0 0 auto;
+  width: 440px;
+  max-width: calc(100% - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-left: 1px solid #dbe5f3;
+  padding: 0 24px 32px;
+  background: #ffffff;
+  box-shadow: -12px 0 40px rgb(15 23 42 / 10%);
+}
+
+.drawer-header {
   position: sticky;
-  top: 24px;
-  border: 1px solid #dbe5f3;
-  border-radius: 18px;
-  padding: 18px;
-  background: #f8fafc;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 0;
+  background: #ffffff;
+  border-bottom: 1px solid #dbe5f3;
 }
 
-.bubble-details h3 {
-  margin: 0 0 12px;
-  color: #111827;
-}
-
-.bubble-details dl,
-.bubble-details div {
-  display: grid;
-  gap: 6px;
+.bubble-details h3,
+.bubble-details h4 {
   margin: 0;
+  color: #172033;
 }
 
-.bubble-details div + div {
-  margin-top: 14px;
+.bubble-details h4 {
+  margin-top: 20px;
+  font-size: 0.85rem;
+}
+
+.drawer-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 24px 0;
 }
 
 .bubble-details dt {
+  margin-bottom: 6px;
   color: #64748b;
   font-size: 0.75rem;
-  font-weight: 800;
-  text-transform: uppercase;
+  font-weight: 700;
 }
 
 .bubble-details dd {
   margin: 0;
   color: #172033;
+  font-size: 0.85rem;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.bubble-details pre {
+  overflow: auto;
+  max-height: 55vh;
+  border: 1px solid #dbe5f3;
+  border-radius: 10px;
+  padding: 14px;
+  background: #f6f8fb;
+  color: #172033;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.json-section {
+  margin-top: 16px;
+  border-top: 1px solid #dbe5f3;
+  padding-top: 16px;
+}
+
+.json-section summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.json-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.bubble-details button {
+  flex-shrink: 0;
+  border: 1px solid #dbe5f3;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #f6f8fb;
+  color: #172033;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.bubble-details button:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.bubble-details button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.bubble-details :is(button, summary, pre):focus-visible {
+  outline: 3px solid #93c5fd;
+  outline-offset: 3px;
+}
+
+.copy-feedback {
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.truncation-info {
+  margin-top: 20px;
+  border-left: 3px solid #dbe5f3;
+  padding-left: 12px;
+  font-size: 0.8rem;
+}
+
+.truncation-info[data-truncated="true"] {
+  color: #92400e;
+  font-weight: 700;
 }
 
 .empty-state,
@@ -328,9 +430,15 @@ h1 {
   color: #64748b;
 }
 
-.empty-turn,
-.bubble-details.empty-state {
+.empty-turn {
   margin-top: 0;
+}
+
+@media (max-width: 1040px) {
+  .shell--inspecting {
+    width: min(960px, 100%);
+    margin: 0 auto;
+  }
 }
 
 @media (max-width: 760px) {
@@ -342,11 +450,16 @@ h1 {
     text-align: left;
   }
 
-  .timeline-layout {
-    grid-template-columns: 1fr;
+  .shell {
+    padding: 32px 16px;
+  }
+
+  .card {
+    padding: 20px;
   }
 
   .bubble-details {
-    position: static;
+    padding-right: 16px;
+    padding-left: 16px;
   }
 }

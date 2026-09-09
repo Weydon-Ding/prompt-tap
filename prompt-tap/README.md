@@ -222,7 +222,9 @@ Prompt Tap Web UI 提供聊天式 Prompt Log 查看器：
 - 关闭响应正文捕获时，已完成 response 会显示 assistant placeholder；4xx/5xx response 会显示 error Prompt Bubble。
 - Prompt Turn 小元信息展示 request model、status、duration 和去掉 query string 的 display path；TopBar summary 展示 warning 数量，warning 详情显示在主时间线外。
 - 历史 assistant/tool 活动保留在 Prompt Turn 的原始 request/response 数据中，但不进入主时间线；tool definitions 不创建 Prompt Bubble，实际 tool calls 会合并为 `tool_call` Bubble。
-- 点击 Prompt Bubble 后，右侧详情抽屉展示元数据、Safe Request Headers、当前气泡 JSON、完整 request/response JSON。
+- 点击任意 Prompt Bubble 后，右侧非模态详情抽屉展示 request ID、时间戳、method、包含 query string 的完整 path、model、status、duration 和 Safe Request Headers；关闭按钮或 Escape 可关闭抽屉并返回气泡。
+- Current Bubble JSON 展示归一化的 `{ role, content }`，Request JSON 和 Response JSON 展示完整 Prompt Log record（不仅是 `payload`），各自支持展开和复制。`system/user/raw/unknown` 默认展开当前气泡，`assistant/tool_call/error/pending` 默认展开 Response JSON；无 response record 时回退到当前气泡。
+- 抽屉分别显示 request/response 的 `body_truncated` 信息，不对已经记录的 `raw_body` 再次截断。未捕获的记录不可复制；复制成功或失败会明确反馈。Clipboard API 需要浏览器支持及安全上下文（HTTPS 或 localhost）。复制内容仍属于敏感调试数据，请谨慎分享。
 - SSE 断线重连后，页面会重新拉取当天日志并去重。
 
 当天无 Prompt Log 时，页面会提示把应用 OpenAI Base URL 指向 `http://127.0.0.1:8888/v1`。
@@ -261,3 +263,14 @@ python -m pytest
 ```
 
 Windows 也可以使用 `py -m pip ...` 与 `py -m pytest`。
+
+前端行为测试、类型检查和生产构建（同样从仓库根目录运行）：
+
+```bash
+npm --prefix prompt-tap/ui ci
+npm --prefix prompt-tap/ui test
+npm --prefix prompt-tap/ui run typecheck
+npm --prefix prompt-tap/ui run build
+```
+
+定向运行详情抽屉测试可使用 `npm --prefix prompt-tap/ui test -- src/App.test.tsx`。测试通过用户点击、键盘操作和浏览器剪贴板边界验证抽屉行为，不依赖内部组件实现。

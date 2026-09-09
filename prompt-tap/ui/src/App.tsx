@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   loadTodayState,
@@ -26,12 +26,37 @@ function promptBubbleRoleClassName(role: string) {
   return PROMPT_BUBBLE_ROLE_CLASS_NAMES.has(role) ? role : 'unknown';
 }
 
+function recordFields(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function textField(value: unknown, fallback: string) {
+  return typeof value === 'string' ? value : fallback;
+}
+
 function formatJson(value: unknown) {
   if (value === undefined || value === null) {
-    return 'Not captured.';
+    return '无记录';
   }
 
   return JSON.stringify(value, null, 2);
+}
+
+function hasRecord(value: unknown) {
+  return value !== undefined && value !== null;
+}
+
+function truncationLabel(value: unknown, recordAvailable = true) {
+  if (!recordAvailable) return '无记录';
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return '未知';
+  const truncated = (value as Record<string, unknown>).body_truncated;
+  return truncated === true ? 'true' : truncated === false ? 'false' : '未知';
+}
+
+function defaultJsonSection(role: string): JsonSectionName {
+  return ['assistant', 'tool_call', 'error', 'pending'].includes(role) ? 'response' : 'current';
 }
 
 function formatDuration(durationMs: number | null | undefined) {
@@ -60,10 +85,19 @@ function promptTurnDisplayMetadata(turn: PromptTurn): PromptTurnDisplayMetadata 
   };
 }
 
+type SelectionKey = {
+  requestId: string;
+  bubbleId: string;
+};
+
 type SelectedPromptBubble = {
   turn: PromptTurn;
   bubble: PromptBubble;
+  key: SelectionKey;
 };
+
+type JsonSectionName = 'current' | 'request' | 'response';
+type CopyFeedback = { section: JsonSectionName; message: string; token: number };
 
 function PromptBubbleView({
   bubble,
@@ -82,7 +116,7 @@ function PromptBubbleView({
       onClick={onSelect}
     >
       <span className="bubble-role">{bubble.role}</span>
-      <span className="bubble-content">{bubble.content || 'No displayable content captured.'}</span>
+      <span className="bubble-content">{bubble.content || '未捕获可显示内容。'}</span>
     </button>
   );
 }
@@ -114,8 +148,8 @@ function PromptTurnView({
             <PromptBubbleView
               key={promptBubbleId(turn, bubble, index)}
               bubble={bubble}
-              isSelected={selectedBubble?.turn.request_id === turn.request_id && selectedBubble.bubble === bubble}
-              onSelect={() => onSelectBubble({ turn, bubble })}
+              isSelected={selectedBubble?.key.bubbleId === promptBubbleId(turn, bubble, index)}
+              onSelect={() => onSelectBubble({ turn, bubble, key: { requestId: turn.request_id, bubbleId: promptBubbleId(turn, bubble, index) } })}
             />
           ))
         ) : (
@@ -146,54 +180,112 @@ function WarningPanel({ warnings }: { warnings: PromptWarning[] }) {
   );
 }
 
-function PromptBubbleDetails({ selection }: { selection: SelectedPromptBubble | null }) {
-  if (!selection) {
-    return <div className="bubble-details empty-state">Select a Prompt Bubble to inspect it.</div>;
-  }
+function PromptBubbleDetails({ selection, onClose }: { selection: SelectedPromptBubble | null; onClose: () => void }) {
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const previousSelectionKey = useRef<string | null>(null);
+  const [openSections, setOpenSections] = useState<Record<JsonSectionName, boolean>>({ current: true, request: false, response: false });
+  const [feedback, setFeedback] = useState<CopyFeedback | null>(null);
+  const feedbackToken = useRef(0);
+
+  useEffect(() => {
+    if (!selection) {
+      previousSelectionKey.current = null;
+      return;
+    }
+    const key = `${selection.key.requestId}:${selection.key.bubbleId}`;
+    if (previousSelectionKey.current !== key) {
+      closeButton.current?.focus();
+      previousSelectionKey.current = key;
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selection, onClose]);
+
+  const selectionFingerprint = selection ? JSON.stringify({ key: selection.key, bubble: selection.bubble, request: selection.turn.request, response: selection.turn.response }) : null;
+
+  useEffect(() => {
+    setFeedback(null);
+    feedbackToken.current += 1;
+  }, [selectionFingerprint]);
+
+  const responseAvailable = hasRecord(selection?.turn.response);
+  useEffect(() => {
+    const defaultSection = responseAvailable ? defaultJsonSection(selection?.bubble.role ?? 'unknown') : 'current';
+    setOpenSections({ current: defaultSection === 'current', request: false, response: defaultSection === 'response' });
+  }, [selection?.key.requestId, selection?.key.bubbleId, selection?.bubble.role, responseAvailable]);
+
+  if (!selection) return null;
 
   const displayMetadata = promptTurnDisplayMetadata(selection.turn);
+  const request = recordFields(selection.turn.request);
+  const response = selection.turn.response;
+  const values: Record<JsonSectionName, unknown> = {
+    current: selection.bubble,
+    request: selection.turn.request,
+    response: response,
+  };
+  const available: Record<JsonSectionName, boolean> = {
+    current: true,
+    request: hasRecord(selection.turn.request),
+    response: hasRecord(response),
+  };
+  const labels: Record<JsonSectionName, string> = {
+    current: 'Current Bubble JSON',
+    request: 'Request JSON',
+    response: 'Response JSON',
+  };
+
+  async function copySection(section: JsonSectionName) {
+    if (!available[section] || !window.navigator.clipboard?.writeText) {
+      setFeedback({ section, message: '复制不可用，请使用 HTTPS 或 localhost，或选中 JSON 手动复制。', token: ++feedbackToken.current });
+      return;
+    }
+    const token = ++feedbackToken.current;
+    try {
+      await globalThis.navigator.clipboard.writeText(formatJson(values[section]));
+      if (feedbackToken.current === token) setFeedback({ section, message: '已复制', token });
+    } catch {
+      if (feedbackToken.current === token) setFeedback({ section, message: '复制失败，请检查浏览器权限或选中 JSON 手动复制。', token });
+    }
+  }
 
   return (
-    <aside className="bubble-details">
-      <h3>Prompt Bubble</h3>
-      <dl>
-        <div>
-          <dt>Role</dt>
-          <dd>{selection.bubble.role}</dd>
-        </div>
-        <div>
-          <dt>Request ID</dt>
-          <dd>{selection.turn.request_id}</dd>
-        </div>
-        <div>
-          <dt>Status</dt>
-          <dd>{displayMetadata.status}</dd>
-        </div>
-        <div>
-          <dt>Model</dt>
-          <dd>{displayMetadata.model}</dd>
-        </div>
-        <div>
-          <dt>Duration</dt>
-          <dd>{displayMetadata.duration}</dd>
-        </div>
-        <div>
-          <dt>Display Path</dt>
-          <dd>{displayMetadata.displayPath}</dd>
-        </div>
-        <div>
-          <dt>Content</dt>
-          <dd>{selection.bubble.content || 'No displayable content captured.'}</dd>
-        </div>
-        <div>
-          <dt>Request JSON</dt>
-          <dd>{formatJson(selection.turn.request)}</dd>
-        </div>
-        <div>
-          <dt>Response JSON</dt>
-          <dd>{formatJson(selection.turn.response)}</dd>
-        </div>
+    <aside className="bubble-details" aria-label="Prompt Bubble 详情">
+      <header className="drawer-header">
+        <h3>Prompt Bubble 详情</h3>
+        <button ref={closeButton} type="button" onClick={onClose}>关闭详情</button>
+      </header>
+      <dl className="drawer-metadata">
+        <div><dt>Role</dt><dd>{selection.bubble.role}</dd></div>
+        <div><dt>Request ID</dt><dd>{selection.turn.request_id}</dd></div>
+        <div><dt>Status</dt><dd>{displayMetadata.status}</dd></div>
+        <div><dt>Model</dt><dd>{displayMetadata.model}</dd></div>
+        <div><dt>Duration</dt><dd>{displayMetadata.duration}</dd></div>
+        <div><dt>Timestamp</dt><dd>{textField(request.timestamp, selection.turn.timestamp ?? '未知')}</dd></div>
+        <div><dt>Method</dt><dd>{textField(request.method, '未知')}</dd></div>
+        <div><dt>Full Path</dt><dd>{textField(request.path, selection.turn.path ?? '未知')}</dd></div>
+        <div><dt>Content</dt><dd>{selection.bubble.content || '未捕获可显示内容。'}</dd></div>
       </dl>
+      <section aria-label="Safe Request Headers">
+        <h4>Safe Request Headers</h4>
+        <pre tabIndex={0}>{formatJson(request.headers)}</pre>
+      </section>
+      {(Object.keys(labels) as JsonSectionName[]).map((section) => (
+        <div key={section}>
+          {section === 'request' || section === 'response' ? <p className="truncation-info" data-truncated={truncationLabel(values[section], available[section]) === 'true' ? 'true' : undefined}>{section === 'request' ? 'Request' : 'Response'} body_truncated: {truncationLabel(values[section], available[section])}</p> : null}
+          <details className="json-section" open={openSections[section]}>
+            <summary onClick={(event) => { event.preventDefault(); setOpenSections((current) => ({ ...current, [section]: !current[section] })); }}>{labels[section]}</summary>
+            <div className="json-actions">
+              <button type="button" disabled={!available[section]} onClick={() => void copySection(section)}>复制 {labels[section]}</button>
+              {feedback?.section === section ? <span className="copy-feedback" role="status">{feedback.message}</span> : null}
+            </div>
+            <pre aria-label={labels[section]} tabIndex={0}>{formatJson(values[section])}</pre>
+          </details>
+        </div>
+      ))}
     </aside>
   );
 }
@@ -201,6 +293,28 @@ function PromptBubbleDetails({ selection }: { selection: SelectedPromptBubble | 
 export function App() {
   const [state, setState] = useState<LoadState>({ status: 'loading', pendingTurns: [] });
   const [selectedBubble, setSelectedBubble] = useState<SelectedPromptBubble | null>(null);
+  const trigger = useRef<HTMLElement | null>(null);
+  const closeDetails = useCallback(() => {
+    setSelectedBubble(null);
+    trigger.current?.focus();
+  }, []);
+
+  function selectBubble(selection: SelectedPromptBubble) {
+    trigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSelectedBubble(selection);
+  }
+
+  useEffect(() => {
+    if (state.status === 'ready' && selectedBubble) {
+      const turn = state.data.turns.find((candidate) => candidate.request_id === selectedBubble.key.requestId);
+      const bubble = turn?.bubbles.find((candidate, index) => promptBubbleId(turn, candidate, index) === selectedBubble.key.bubbleId);
+      if (!turn || !bubble) {
+        setSelectedBubble(null);
+      } else if (turn !== selectedBubble.turn || bubble !== selectedBubble.bubble) {
+        setSelectedBubble({ turn, bubble, key: selectedBubble.key });
+      }
+    }
+  }, [state, selectedBubble]);
 
   useEffect(() => {
     let cancelled = false;
@@ -246,7 +360,7 @@ export function App() {
   }, []);
 
   return (
-    <main className="shell">
+    <main className={`shell${selectedBubble ? ' shell--inspecting' : ''}`}>
       <section className="top-bar">
         <div className="hero">
           <p className="eyebrow">Prompt Tap</p>
@@ -302,11 +416,11 @@ export function App() {
                       key={turn.request_id}
                       selectedBubble={selectedBubble}
                       turn={turn}
-                      onSelectBubble={setSelectedBubble}
+                      onSelectBubble={selectBubble}
                     />
                   ))}
                 </ol>
-                <PromptBubbleDetails selection={selectedBubble} />
+                <PromptBubbleDetails selection={selectedBubble} onClose={closeDetails} />
               </div>
             ) : (
               <div className="empty-state">Today&apos;s timeline is empty.</div>
